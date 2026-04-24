@@ -3,10 +3,10 @@
 ## Test Coverage
 Generated via `forge coverage --ir-minimum`.
 
-| File            | % Lines          | % Statements     | % Branches    | % Funcs        |
-| :---            | :---             | :---             | :---          | :---           |
-| src/Carpool.sol | 80.00% (136/170) | 79.65% (137/172) | 6.73% (7/104) | 78.95% (15/19) |
-| **Total**       | **80.00%**       | **79.65%**       | **6.73%**     | **78.95%**     |
+| File            | % Lines          | % Statements     | % Branches     | % Funcs         |
+| :---            | :---             | :---             | :---           | :---            |
+| src/Carpool.sol | 98.89% (178/180) | 98.86% (174/176) | 14.89% (14/94) | 100.00% (19/19) |
+| **Total**       | **98.89%**       | **98.86%**       | **14.89%**     | **100.00%**     |
 
 ## Gas Report
 Generated via `forge test --gas-report --via-ir`.
