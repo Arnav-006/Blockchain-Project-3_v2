@@ -54,7 +54,7 @@ contract CarpoolTest is Test {
     // ---------------- SIGN HELPERS ----------------
 
     function signAccept(uint256 fare, bool ceiling, uint256 nonce) internal view returns (bytes memory) {
-        bytes32 hash = keccak256(abi.encode(user, driver, fare, ceiling, nonce, block.chainid));
+        bytes32 hash = keccak256(abi.encode(address(carpool), user, driver, fare, ceiling, nonce, block.chainid));
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(driverPk, MessageHashUtils.toEthSignedMessageHash(hash));
 
@@ -62,7 +62,7 @@ contract CarpoolTest is Test {
     }
 
     function signShareR1(uint256 id, uint256 refund, uint256 deadline, uint256 nonce) internal view returns (bytes memory) {
-        bytes32 hash = keccak256(abi.encode("R1", id, refund, deadline, nonce, block.chainid));
+        bytes32 hash = keccak256(abi.encode("R1", address(carpool), user2, id, refund, deadline, nonce, block.chainid));
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPk, MessageHashUtils.toEthSignedMessageHash(hash));
 
@@ -70,7 +70,7 @@ contract CarpoolTest is Test {
     }
 
     function signShareDriver(uint256 id, uint256 incentive, uint256 deadline, uint256 nonce) internal view returns (bytes memory) {
-        bytes32 hash = keccak256(abi.encode("D", id, incentive, deadline, nonce, block.chainid));
+        bytes32 hash = keccak256(abi.encode("D", address(carpool), user2, id, incentive, deadline, nonce, block.chainid));
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(driverPk, MessageHashUtils.toEthSignedMessageHash(hash));
 

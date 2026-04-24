@@ -218,7 +218,7 @@ contract Carpool is Ownable, ReentrancyGuard {
 
         uint256 nonce = driverNonces[driver];
 
-        bytes32 hash = keccak256(abi.encode(msg.sender, driver, fare, ceiling, nonce, block.chainid));
+        bytes32 hash = keccak256(abi.encode(address(this), msg.sender, driver, fare, ceiling, nonce, block.chainid));
         require(MessageHashUtils.toEthSignedMessageHash(hash).recover(sig) == driver, "Invalid driver sig");
 
         driverNonces[driver]++;
@@ -281,10 +281,11 @@ contract Carpool is Ownable, ReentrancyGuard {
         uint256 nonce = shareApprovalNonces[r.user];
 
         // FIX 6: abi.encode for both hashes
-        bytes32 h1 = keccak256(abi.encode("R1", id, refund, deadline, nonce, block.chainid));
+        // FIX: Bind msg.sender to prevent front-running (SWC-114)
+        bytes32 h1 = keccak256(abi.encode("R1", address(this), msg.sender, id, refund, deadline, nonce, block.chainid));
         require(MessageHashUtils.toEthSignedMessageHash(h1).recover(r1Sig) == r.user, "Inv");
 
-        bytes32 h2 = keccak256(abi.encode("D", id, incentive, deadline, nonce, block.chainid));
+        bytes32 h2 = keccak256(abi.encode("D", address(this), msg.sender, id, incentive, deadline, nonce, block.chainid));
         require(MessageHashUtils.toEthSignedMessageHash(h2).recover(dSig) == r.driver, "Inv");
 
         shareApprovalNonces[r.user]++;
@@ -335,10 +336,9 @@ contract Carpool is Ownable, ReentrancyGuard {
         // FIX 7: push to pending instead of direct transfer for driver
         pendingWithdrawals[r.driver] += driverPayout;
 
-        // User refund is a direct transfer (users aren't repeated callers, lower risk)
+        // FIX 7 (extended): pull pattern for user refunds to prevent DoS by revert (SWC-113)
         if (rider1Refund > 0) {
-            (bool success,) = payable(r.user).call{value: rider1Refund}("");
-            require(success, "Transfer failed");
+            pendingWithdrawals[r.user] += rider1Refund;
         }
         emit RideCompleted(id, driverPayout);
     }
@@ -355,16 +355,11 @@ contract Carpool is Ownable, ReentrancyGuard {
 
         uint256 total = r.fare + r.ceilingBond;
 
-        // Interactions last
-        (bool success,) = payable(r.user).call{value: total}("");
-        require(success, "Transfer failed");
+        // Interactions last (pull payment for users)
+        pendingWithdrawals[r.user] += total;
 
         if (r.sharedInfo.secondUser != address(0)) {
-            (bool success2,) = payable(r.sharedInfo.secondUser)
-            .call{value: r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2}(
-                ""
-            );
-            require(success2, "Transfer failed");
+            pendingWithdrawals[r.sharedInfo.secondUser] += r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2;
         }
 
         emit RideCancelled(id);
@@ -394,17 +389,12 @@ contract Carpool is Ownable, ReentrancyGuard {
         r.endTime = block.timestamp;
         drivers[r.driver].isOnRide = false;
 
-        // FIX 7: pull pattern for driver
+        // FIX 7 (extended): pull pattern for driver and users
         pendingWithdrawals[r.driver] += payout;
-        (bool success,) = payable(r.user).call{value: total - payout}("");
-        require(success, "Transfer failed");
+        pendingWithdrawals[r.user] += (total - payout);
 
         if (r.sharedInfo.secondUser != address(0)) {
-            (bool success2,) = payable(r.sharedInfo.secondUser)
-            .call{value: r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2}(
-                ""
-            );
-            require(success2, "Transfer failed");
+            pendingWithdrawals[r.sharedInfo.secondUser] += r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2;
         }
 
         emit DisputeResolved(id);
