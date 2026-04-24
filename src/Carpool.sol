@@ -101,6 +101,7 @@ contract Carpool is Ownable, ReentrancyGuard {
     event DisputeResolved(uint256 indexed rideId);
     event DriverRated(address indexed driver, uint256 rating);
     event Withdrawal(address indexed to, uint256 amount);
+    event BackendUpdated(address indexed oldBackend, address indexed newBackend);
 
     modifier onlyActiveDriver() {
         require(drivers[msg.sender].status == DriverStatus.Active, "Inactive");
@@ -132,7 +133,9 @@ contract Carpool is Ownable, ReentrancyGuard {
 
     function setBackend(address _backend) external onlyOwner {
         require(_backend != address(0), "Invalid");
+        address oldBackend = backend;
         backend = _backend;
+        emit BackendUpdated(oldBackend, _backend);
     }
 
     // ---------------- DRIVER ----------------

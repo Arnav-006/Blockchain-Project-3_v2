@@ -96,3 +96,18 @@
 **Status**: Addressed & Compliant<br>
 **Description**: In Solidity versions prior to 0.8.0, numbers silently wrap around when overflowing/underflowing, potentially leading to catastrophic mathematical errors.<br>
 **Resolution**: The contract uses `pragma solidity ^0.8.13;`, which includes native overflow and underflow protection built directly into the compiler. Additionally, there are no explicit unsafe downcasts within the contract.
+
+## 16. Incorrect Storage Packing / Raw Assembly Write (SWC-124)
+**Status**: Addressed (Not Applicable By Design)<br>
+**Description**: Writing to storage slots using raw `assembly { sstore(...) }` can inadvertently corrupt tightly packed variables residing in the same 256-bit slot.<br>
+**Resolution**: `Carpool.sol` completely avoids the use of inline assembly. All state variables are written using standard, typed Solidity assignments, making memory corruption from raw slot writes impossible.
+
+## 17. Missing Event Emission (SWC-138)
+**Status**: Addressed & Compliant<br>
+**Description**: High-privilege state changes that do not emit events cannot be easily monitored by off-chain security systems, allowing silent takeovers or malicious administrative actions to go unnoticed.<br>
+**Resolution**: The contract inherits from OpenZeppelin's `Ownable`, which correctly emits an `OwnershipTransferred` event whenever ownership changes. However, the `setBackend` function was previously missing an event. A `BackendUpdated` event has now been added and is emitted every time the owner updates the backend oracle address.
+
+## 18. Unsafe Type Casting (SWC-101)
+**Status**: Addressed & Compliant<br>
+**Description**: Explicit downcasts (like `uint8(value)`) do not revert in Solidity 0.8.x when they truncate data, silently bypassing critical thresholds or value checks.<br>
+**Resolution**: The contract exclusively uses the full `uint256` and `int256` types for all state tracking, math, and internal accounting. There are no explicit downcasts whatsoever in the `Carpool.sol` contract logic, removing the risk of silent truncation.
