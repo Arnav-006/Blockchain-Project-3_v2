@@ -178,7 +178,7 @@ contract CarpoolTest is Test {
         vm.prank(user);
         carpool.rateDriver(id, 5);
 
-        (,, uint256 rating, uint256 count,,,) = carpool.drivers(driver);
+        (,,,, uint256 rating, uint256 count,) = carpool.drivers(driver);
 
         assertEq(rating, 5);
         assertEq(count, 1);
