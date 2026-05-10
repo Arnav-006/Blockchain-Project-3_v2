@@ -44,12 +44,12 @@ contract Carpool is Ownable, ReentrancyGuard {
 
     struct Driver {
         address driverAddress;
+        DriverStatus status;
+        bool isOnRide;
         bytes32 docHash;
         uint256 rating;
         uint256 ratingCount;
         uint256 amtDeposited;
-        DriverStatus status;
-        bool isOnRide;
     }
 
     struct Location {
@@ -59,6 +59,7 @@ contract Carpool is Ownable, ReentrancyGuard {
 
     struct Ride {
         address user;
+        RideStatus status;
         address driver;
         Location start;
         Location end;
@@ -70,7 +71,6 @@ contract Carpool is Ownable, ReentrancyGuard {
         uint256 estimatedTime;
         SharedRideInfo sharedInfo;
         uint256 rating;
-        RideStatus status;
     }
 
     struct SharedRideInfo {
@@ -101,6 +101,7 @@ contract Carpool is Ownable, ReentrancyGuard {
     event DisputeResolved(uint256 indexed rideId);
     event DriverRated(address indexed driver, uint256 rating);
     event Withdrawal(address indexed to, uint256 amount);
+    event BackendUpdated(address indexed oldBackend, address indexed newBackend);
 
     modifier onlyActiveDriver() {
         require(drivers[msg.sender].status == DriverStatus.Active, "Inactive");
@@ -132,7 +133,9 @@ contract Carpool is Ownable, ReentrancyGuard {
 
     function setBackend(address _backend) external onlyOwner {
         require(_backend != address(0), "Invalid");
+        address oldBackend = backend;
         backend = _backend;
+        emit BackendUpdated(oldBackend, _backend);
     }
 
     // ---------------- DRIVER ----------------
@@ -143,7 +146,7 @@ contract Carpool is Ownable, ReentrancyGuard {
         require(!idsHashUsed[id], "ID ");
         idsHashUsed[id] = true;
 
-        drivers[d] = Driver(d, doc, 0, 0, 0, DriverStatus.Verified, false);
+        drivers[d] = Driver(d, DriverStatus.Verified, false, doc, 0, 0, 0);
         emit DriverRegistered(d);
     }
 
@@ -208,7 +211,7 @@ contract Carpool is Ownable, ReentrancyGuard {
     // ---------------- RIDE ----------------
 
     // FIX 6: abi.encode instead of abi.encodePacked to prevent hash collisions
-    function acceptRide(address driver, uint256 fare, bool ceiling, bytes memory sig)
+    function acceptRide(address driver, uint256 fare, bool ceiling, bytes calldata sig)
         external
         payable
         returns (uint256 id)
@@ -218,16 +221,21 @@ contract Carpool is Ownable, ReentrancyGuard {
 
         uint256 nonce = driverNonces[driver];
 
-        bytes32 hash = keccak256(abi.encode(msg.sender, driver, fare, ceiling, nonce, block.chainid));
+        bytes32 hash = keccak256(abi.encode(address(this), msg.sender, driver, fare, ceiling, nonce, block.chainid));
         require(MessageHashUtils.toEthSignedMessageHash(hash).recover(sig) == driver, "Invalid driver sig");
 
-        driverNonces[driver]++;
+        unchecked {
+            ++driverNonces[driver];
+        }
         uint256 required = fare + (ceiling ? (fare * CEILING_BOND_PERCENT) / 100 : 0);
         require(msg.value == required, "Incorrect");
 
         drivers[driver].isOnRide = true;
 
-        id = nextRideId++;
+        id = nextRideId;
+        unchecked {
+            ++nextRideId;
+        }
         Ride storage r = rides[id];
         r.user = msg.sender;
         r.driver = driver;
@@ -260,8 +268,8 @@ contract Carpool is Ownable, ReentrancyGuard {
         uint256 refund,
         uint256 incentive,
         uint256 deadline, // FIX 2: must sign a deadline
-        bytes memory r1Sig,
-        bytes memory dSig
+        bytes calldata r1Sig,
+        bytes calldata dSig
     ) external payable rideExists(id) {
         require(block.timestamp <= deadline, ""); // FIX 2
 
@@ -281,13 +289,16 @@ contract Carpool is Ownable, ReentrancyGuard {
         uint256 nonce = shareApprovalNonces[r.user];
 
         // FIX 6: abi.encode for both hashes
-        bytes32 h1 = keccak256(abi.encode("R1", id, refund, deadline, nonce, block.chainid));
+        // FIX: Bind msg.sender to prevent front-running (SWC-114)
+        bytes32 h1 = keccak256(abi.encode("R1", address(this), msg.sender, id, refund, deadline, nonce, block.chainid));
         require(MessageHashUtils.toEthSignedMessageHash(h1).recover(r1Sig) == r.user, "Inv");
 
-        bytes32 h2 = keccak256(abi.encode("D", id, incentive, deadline, nonce, block.chainid));
+        bytes32 h2 = keccak256(abi.encode("D", address(this), msg.sender, id, incentive, deadline, nonce, block.chainid));
         require(MessageHashUtils.toEthSignedMessageHash(h2).recover(dSig) == r.driver, "Inv");
 
-        shareApprovalNonces[r.user]++;
+        unchecked {
+            ++shareApprovalNonces[r.user];
+        }
         r.sharedInfo = SharedRideInfo(msg.sender, refund, incentive);
 
         emit RideShared(id, msg.sender, refund, incentive);
@@ -304,19 +315,28 @@ contract Carpool is Ownable, ReentrancyGuard {
         rideExists(id)
     {
         Ride storage r = rides[id];
-        require(msg.sender == r.driver, "Not");
+        address rDriver = r.driver;
+        address rUser = r.user;
+        require(msg.sender == rDriver, "Not");
         require(r.status == RideStatus.Started, "Wrong");
 
-        r.endTime = block.timestamp;
-        uint256 finalFare = r.fare;
-        uint256 actualTime = r.endTime - r.startTime;
-
-        if (actualTime > r.estimatedTime + delayThreshold) {
-            uint256 excessTime = actualTime - (r.estimatedTime + delayThreshold);
-            finalFare += excessTime * surchargePerSecond;
+        uint256 endTime = block.timestamp;
+        r.endTime = endTime;
+        uint256 rFare = r.fare;
+        uint256 finalFare = rFare;
+        uint256 actualTime;
+        unchecked {
+            actualTime = endTime - r.startTime;
         }
 
-        uint256 total = r.fare + r.ceilingBond;
+        if (actualTime > r.estimatedTime + delayThreshold) {
+            unchecked {
+                uint256 excessTime = actualTime - (r.estimatedTime + delayThreshold);
+                finalFare += excessTime * surchargePerSecond;
+            }
+        }
+
+        uint256 total = rFare + r.ceilingBond;
         if (finalFare > total) {
             finalFare = total;
         }
@@ -327,18 +347,17 @@ contract Carpool is Ownable, ReentrancyGuard {
         // Effects first (CEI pattern)
         r.status = RideStatus.Completed;
         r.finalFare = finalFare;
-        drivers[r.driver].isOnRide = false;
+        drivers[rDriver].isOnRide = false;
 
         uint256 rider1Refund = total - finalFare + r.sharedInfo.rider1Refund;
         uint256 driverPayout = finalFare + r.sharedInfo.driverShareFromR2;
 
         // FIX 7: push to pending instead of direct transfer for driver
-        pendingWithdrawals[r.driver] += driverPayout;
+        pendingWithdrawals[rDriver] += driverPayout;
 
-        // User refund is a direct transfer (users aren't repeated callers, lower risk)
+        // FIX 7 (extended): pull pattern for user refunds to prevent DoS by revert (SWC-113)
         if (rider1Refund > 0) {
-            (bool success,) = payable(r.user).call{value: rider1Refund}("");
-            require(success, "Transfer failed");
+            pendingWithdrawals[rUser] += rider1Refund;
         }
         emit RideCompleted(id, driverPayout);
     }
@@ -346,25 +365,23 @@ contract Carpool is Ownable, ReentrancyGuard {
     // FIX 1: nonReentrant added, state updated before transfers (CEI)
     function cancelRide(uint256 id) external nonReentrant rideExists(id) {
         Ride storage r = rides[id];
-        require(msg.sender == r.user || msg.sender == r.driver, "Unauthorized");
+        address rUser = r.user;
+        address rDriver = r.driver;
+        require(msg.sender == rUser || msg.sender == rDriver, "Unauthorized");
         require(r.status == RideStatus.Started, "Wrong status");
 
         // Effects before interactions (CEI fix)
         r.status = RideStatus.Cancelled;
-        drivers[r.driver].isOnRide = false;
+        drivers[rDriver].isOnRide = false;
 
         uint256 total = r.fare + r.ceilingBond;
 
-        // Interactions last
-        (bool success,) = payable(r.user).call{value: total}("");
-        require(success, "Transfer failed");
+        // Interactions last (pull payment for users)
+        pendingWithdrawals[rUser] += total;
 
-        if (r.sharedInfo.secondUser != address(0)) {
-            (bool success2,) = payable(r.sharedInfo.secondUser)
-            .call{value: r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2}(
-                ""
-            );
-            require(success2, "Transfer failed");
+        address secondUser = r.sharedInfo.secondUser;
+        if (secondUser != address(0)) {
+            pendingWithdrawals[secondUser] += r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2;
         }
 
         emit RideCancelled(id);
@@ -392,19 +409,17 @@ contract Carpool is Ownable, ReentrancyGuard {
         r.status = RideStatus.Completed;
         r.finalFare = payout;
         r.endTime = block.timestamp;
-        drivers[r.driver].isOnRide = false;
+        address rDriver = r.driver;
+        address rUser = r.user;
+        drivers[rDriver].isOnRide = false;
 
-        // FIX 7: pull pattern for driver
-        pendingWithdrawals[r.driver] += payout;
-        (bool success,) = payable(r.user).call{value: total - payout}("");
-        require(success, "Transfer failed");
+        // FIX 7 (extended): pull pattern for driver and users
+        pendingWithdrawals[rDriver] += payout;
+        pendingWithdrawals[rUser] += (total - payout);
 
-        if (r.sharedInfo.secondUser != address(0)) {
-            (bool success2,) = payable(r.sharedInfo.secondUser)
-            .call{value: r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2}(
-                ""
-            );
-            require(success2, "Transfer failed");
+        address secondUser = r.sharedInfo.secondUser;
+        if (secondUser != address(0)) {
+            pendingWithdrawals[secondUser] += r.sharedInfo.rider1Refund + r.sharedInfo.driverShareFromR2;
         }
 
         emit DisputeResolved(id);
@@ -421,11 +436,14 @@ contract Carpool is Ownable, ReentrancyGuard {
         require(r.rating == 0, "Already rated");
 
         r.rating = rating;
-        Driver storage d = drivers[r.driver];
+        address rDriver = r.driver;
+        Driver storage d = drivers[rDriver];
         d.rating += rating;
-        d.ratingCount++;
+        unchecked {
+            ++d.ratingCount;
+        }
 
-        emit DriverRated(r.driver, rating);
+        emit DriverRated(rDriver, rating);
     }
 
     function getRide(uint256 id) external view returns (Ride memory) {
